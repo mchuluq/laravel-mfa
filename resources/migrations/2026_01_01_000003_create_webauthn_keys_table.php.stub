@@ -1,0 +1,45 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+class CreateWebauthnKeysTable extends Migration{
+    
+    /**
+     * Run the migrations.
+     *
+     * @return void
+     */
+    public function up(){
+        Schema::create(config('mfa.tables.webauthn_keys', 'webauthn_keys'), function (Blueprint $table) {
+            $table->id();
+            $table->string('user_id',36);
+            $table->string('name', 100)->nullable(); // User-friendly name for the key
+            $table->text('credential_id'); // Base64 encoded credential ID
+            $table->text('public_key'); // Public key data
+            $table->string('aaguid', 36)->nullable(); // Authenticator AAGUID
+            $table->unsignedInteger('counter')->default(0); // Sign counter for replay protection
+            $table->json('transports')->nullable(); // Transport methods (usb, nfc, ble, internal)
+            $table->string('attestation_format', 50)->nullable();
+            $table->timestamp('last_used_at')->nullable();
+            $table->timestamps();
+
+            // Indexes
+            $table->index('user_id');
+            $table->index('last_used_at');
+
+            // Foreign key (uncomment if you want to enforce)
+            $table->foreign('user_id')->references('id')->on('users')->onDelete('cascade');
+        });
+    }
+
+    /**
+     * Reverse the migrations.
+     *
+     * @return void
+     */
+    public function down(){
+        Schema::dropIfExists(config('mfa.tables.webauthn_keys', 'webauthn_keys'));
+    }
+}
