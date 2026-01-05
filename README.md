@@ -228,19 +228,10 @@ protected $listen = [
 ];
 ```
 
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
-
-## Security
-
-If you discover any security issues, please email security@example.com instead of using the issue tracker.
-
 ## License
 
 The MIT License (MIT). Please see [License File](LICENSE.md) for more information.
 
 ## Credits
 
-- [Your Name](https://github.com/mchuluq)
+- [mchuluq](https://github.com/mchuluq)
