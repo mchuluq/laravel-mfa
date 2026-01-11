@@ -1,5 +1,6 @@
 <?php namespace Mchuluq\LaravelMFA;
 
+use Illuminate\Auth\Recaller;
 use Illuminate\Contracts\Auth\Authenticatable;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Manager;
@@ -145,11 +146,35 @@ class MFAManager extends Manager{
             return false;
         }
         // if via remember
-        if(Auth::viaRemember() == true && config('mfa.auto_verified_from_remember', false) == true){
+        if($this->hasRecaller() == true && config('mfa.auto_verified_from_remember', false) == true){
             $this->markAsVerified();
             return false;
         }
         return true;
+    }
+
+    public function hasRecaller(){
+        $recaller = $this->getRecaller();
+        $user = auth()->user();
+        if(!$recaller){
+            return false;
+        }
+        if(!$recaller->valid()){
+            return false;
+        };
+        if($recaller->hash() == $user->getAuthPassword()){
+            return true;
+        }
+        return false;
+    }
+    public function getRecaller(){
+        $recaller_name = auth()->getRecallerName();
+        $request = request();
+        if (is_null($request)) {
+            return;
+        }
+        $recaller = $request->cookies->get($recaller_name);
+        return new Recaller($recaller);
     }
 
     /**
