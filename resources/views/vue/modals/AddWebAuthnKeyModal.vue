@@ -51,7 +51,7 @@ export default {
                 // Get registration options from server
                 const { data } = await this.$http.post('/mfa/webauthn/register/options');
                 // Start WebAuthn registration
-                const credential = await startRegistration(data.options.publicKey);
+                const credential = await startRegistration({optionsJSON:data.options.publicKey});
                 // Register with server
                 await this.$http.post('/mfa/webauthn/register', {
                     name: this.keyName,

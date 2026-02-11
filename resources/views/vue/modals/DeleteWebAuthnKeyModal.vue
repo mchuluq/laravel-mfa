@@ -9,7 +9,7 @@
                         <button type="button" class="close text-white" @click="$emit('close')"><span>&times;</span></button>
                     </div>
                     <div class="modal-body">
-                        <p>Apakah Anda ingin menghapus security key : <strong>{{ keyData.name }}</strong>?</p>
+                        <p>Apakah Anda ingin menghapus security key ini ?</p>
                         <div class="form-group">
                             <label>Password</label>
                             <input type="password" class="form-control" v-model="password" @keyup.enter="confirm">

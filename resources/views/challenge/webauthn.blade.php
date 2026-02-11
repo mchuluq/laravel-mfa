@@ -69,49 +69,13 @@ document.addEventListener('DOMContentLoaded', function() {
     const errorMessage = document.getElementById('error-message');
     const keyIcon = document.getElementById('key-icon');
 
-    // Convert base64url (RFC 4648 §5) to standard base64
-    function base64UrlToBase64(b64url) {
-        if (!b64url) return '';
-        let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
-        while (b64.length % 4) b64 += '=';
-        return b64;
-    }
-
-    function bufferFromBase64Url(b64url) {
-        try {
-            const b64 = base64UrlToBase64(b64url);
-            const binary = atob(b64);
-            return Uint8Array.from(binary, c => c.charCodeAt(0));
-        } catch (e) {
-            throw new Error('Invalid base64 data: ' + (b64url || ''));
-        }
-    }
-
     authenticateBtn.addEventListener('click', async function() {
         try {
             // Disable button
             authenticateBtn.disabled = true;
             authenticateBtn.innerHTML = '<span class="spinner-border spinner-border-sm mr-2"></span>{{ __("Preparing...") }}';
             errorMessage.style.display = 'none';
-
-            // Add pulse animation
             keyIcon.classList.add('pulse-animation');
-
-            // Get authentication options
-            const optionsResponse = await fetch('{{ route("mfa.webauthn.auth.options") }}', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
-                }
-            });
-
-            if (!optionsResponse.ok) {
-                throw new Error('{{ __("Failed to get authentication options") }}');
-            }
-
-            const { options } = await optionsResponse.json();
-
             // Update status
             statusMessage.innerHTML = `
                 <h5 class="mb-3">{{ __('Waiting for authentication') }}</h5>
@@ -119,53 +83,29 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
             authenticateBtn.textContent = '{{ __("Authenticating...") }}';
 
-            // Prepare options for WebAuthn API
-            console.log('WebAuthn raw options:', options.publicKey);
-            const publicKeyCredentialRequestOptions = {
-                challenge: bufferFromBase64Url(options.publicKey.challenge),
-                timeout: options.publicKey.timeout,
-                rpId: options.publicKey.rpId,
-                userVerification: options.publicKey.userVerification,
-                allowCredentials: options.publicKey.allowCredentials?.map(cred => ({
-                    type: cred.type,
-                    id: bufferFromBase64Url(cred.id),
-                    transports: cred.transports
-                }))
-            };
-
-            // Get credential from authenticator
-            const assertion = await navigator.credentials.get({
-                publicKey: publicKeyCredentialRequestOptions
-            });
-
-            // Prepare credential for verification
-            const credential = {
-                id: assertion.id,
-                rawId: btoa(String.fromCharCode(...new Uint8Array(assertion.rawId))),
-                response: {
-                    authenticatorData: btoa(String.fromCharCode(...new Uint8Array(assertion.response.authenticatorData))),
-                    clientDataJSON: btoa(String.fromCharCode(...new Uint8Array(assertion.response.clientDataJSON))),
-                    signature: btoa(String.fromCharCode(...new Uint8Array(assertion.response.signature))),
-                    userHandle: assertion.response.userHandle ? btoa(String.fromCharCode(...new Uint8Array(assertion.response.userHandle))) : null
-                },
-                type: assertion.type
-            };
-
-            // Verify with server
-            authenticateBtn.textContent = '{{ __("Verifying...") }}';
-            
-            const verifyResponse = await fetch('{{ route("mfa.challenge.verify", ["driver" => $driver]) }}', {
-                method: 'POST',
+            // request options
+            console.log('Meminta authentication options...');
+            const optionsResp = await axios.post('{{ route("mfa.webauthn.auth.options") }}',{},{
                 headers: {
                     'Content-Type': 'application/json',
                     'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
-                },
-                body: JSON.stringify({ credential })
+                }
+            }).catch(function (error) {
+                console.log("authentication options error : ",error);
             });
-
-            const result = await verifyResponse.json();
-
-            if (result.success) {
+            const options = optionsResp.data?.options?.publicKey;
+ 
+            // Start authentication
+            authenticateBtn.textContent = '{{ __("Verifying...") }}';
+            console.log('Memulai WebAuthn...', options);
+            const assertion = await window.simple_webauthn_start_auth({optionsJSON:options});
+            console.log('Assertion diterima, mengirim ke server...', assertion);
+            await axios.post('{{ route("mfa.challenge.verify", ["driver" => $driver]) }}', { credential : assertion} ,{
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content
+                }
+            }).then(function (response) {
                 keyIcon.classList.remove('pulse-animation');
                 keyIcon.className = 'fas fa-check-circle fa-4x text-success';
                 
@@ -173,22 +113,19 @@ document.addEventListener('DOMContentLoaded', function() {
                     <h5 class="text-success mb-3">{{ __('Authentication successful!') }}</h5>
                     <p class="text-muted">{{ __('Redirecting you now...') }}</p>
                 `;
-                
-                // Redirect
+        
                 setTimeout(() => {
-                    window.location.href = result.redirect;
-                }, 1000);
-            } else {
-                throw new Error(result.message || '{{ __("Authentication failed") }}');
-            }
+                    if(response.data.redirect){
+                        window.location.href = response.data.redirect;
+                    }    
+                },1000);
+            });
+            console.log('Autentikasi berhasil ✅');
+        } catch (err) {
+            console.error(err);
 
-        } catch (error) {
-            console.error('WebAuthn error:', error);
-            
             keyIcon.classList.remove('pulse-animation');
-            
             let errorMsg = '{{ __("Authentication failed.") }} ';
-            
             if (error.name === 'NotAllowedError') {
                 errorMsg += '{{ __("Authentication was cancelled or timed out.") }}';
             } else if (error.name === 'InvalidStateError') {
@@ -196,12 +133,9 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 errorMsg += error.message || '{{ __("Please try again.") }}';
             }
-
             errorMessage.textContent = errorMsg;
             errorMessage.style.display = 'block';
-
             statusMessage.innerHTML = `<h5 class="text-danger mb-3">{{ __('Authentication failed') }}</h5><p class="text-muted">{{ __('Please try again or use a different method.') }}</p>`;
-
             authenticateBtn.disabled = false;
             authenticateBtn.innerHTML = '<i class="fas fa-fingerprint mr-2"></i>{{ __("Try Again") }}';
         }

@@ -229,6 +229,6 @@ class MFAChallengeController extends Controller{
      * @return string
      */
     protected function getIntendedUrl(): string{
-        return session()->get('mfa_intended_url', config('mfa.authenticated_redirect_uri'));
+        return session()->get('mfa_intended_url', config('mfa.authenticated_redirect_uri','/dashboard'));
     }
 }

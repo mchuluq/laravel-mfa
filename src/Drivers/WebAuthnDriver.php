@@ -150,9 +150,9 @@ class WebAuthnDriver extends AbstractDriver{
             $rpEntity = $this->getRelyingPartyEntity();
             $challenge = random_bytes($this->config['challenge_length'] ?? 32);
             // Store challenge in session
-            session()->put('webauthn_auth_challenge', base64_encode($challenge));
+            session()->put('webauthn_auth_challenge', $challenge);
             $publicKeyCredentialRequestOptions = new PublicKeyCredentialRequestOptions(
-                $challenge
+                rtrim(strtr(base64_encode($challenge), '+/', '-_'), '=')
             );
             // Set RP ID
             $publicKeyCredentialRequestOptions->setRpId($rpEntity->getId());
@@ -164,9 +164,9 @@ class WebAuthnDriver extends AbstractDriver{
             );
             // Allow specific credentials
             $allowCredentials = $this->getExistingCredentials($user);
-            if (!empty($allowCredentials)) {
-                $publicKeyCredentialRequestOptions->allowCredentials($allowCredentials);
-            }
+            // if (!empty($allowCredentials)) {
+            //     $publicKeyCredentialRequestOptions->allowCredentials($allowCredentials);
+            // }
             return [
                 'publicKey' => $this->encodeOptions($publicKeyCredentialRequestOptions),
             ];
@@ -190,16 +190,17 @@ class WebAuthnDriver extends AbstractDriver{
         if (!$storedChallenge || $storedUserId != $user->getAuthIdentifier()) {
             throw MFAException::challengeTimeout();
         }
+
         // In production, implement full attestation verification here
         // Store the credential
         $webAuthnKey = WebAuthnKey::create([
             'user_id' => $user->getAuthIdentifier(),
             'name' => $name ?? 'Security Key',
             'credential_id' => $credential['id'] ?? '',
-            'public_key' => $credential['publicKey'] ?? '',
+            'public_key' => $credential['response']['publicKey'] ?? '',
             'aaguid' => $credential['aaguid'] ?? '00000000-0000-0000-0000-000000000000',
             'counter' => $credential['counter'] ?? 0,
-            'transports' => $credential['transports'] ?? [],
+            'transports' => $credential['transports'] ?? ['internal', 'usb'],
             'attestation_format' => $credential['attestationFormat'] ?? 'none',
         ]);
         // Enable the method
