@@ -4,6 +4,35 @@ use Exception;
 
 class MFAException extends Exception{
     /**
+     * Machine-readable error type, used by controllers to decide how to
+     * react (e.g. rate-limit errors should not bounce the user through a
+     * redirect that immediately re-triggers the same rate-limited action).
+     *
+     * @var string|null
+     */
+    protected $errorType = null;
+
+    /**
+     * Tag this exception with a machine-readable error type.
+     *
+     * @param string $type
+     * @return self
+     */
+    protected function withType(string $type): self{
+        $this->errorType = $type;
+        return $this;
+    }
+
+    /**
+     * Whether this exception represents a rate-limit/throttle condition.
+     *
+     * @return bool
+     */
+    public function isRateLimited(): bool{
+        return $this->errorType === 'rate_limited';
+    }
+
+    /**
      * Create a new MFA exception for driver not found.
      *
      * @param string $driver
@@ -54,7 +83,7 @@ class MFAException extends Exception{
             $seconds,
             config('mfa.rate_limiting.lockout_message', 'Too many attempts. Please try again in :seconds seconds.')
         );
-        return new static($message);
+        return (new static($message))->withType('rate_limited');
     }
 
     /**

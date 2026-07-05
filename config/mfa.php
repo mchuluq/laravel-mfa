@@ -15,6 +15,11 @@ return [
     'session_key' => 'mfa_verified_at',
     'auto_verified_from_remember' => true, // tidak perlu verifikasi lagi jika menggunakan remember me
 
+    // Where to send the user after a successful MFA verification when there
+    // is no 'mfa_intended_url' in session (e.g. verifying right after login,
+    // before the 'mfa' middleware ever ran to capture an intended URL).
+    'authenticated_redirect_uri' => '/dashboard',
+
     'drivers' => [
         'totp' => [
             'enabled' => true,

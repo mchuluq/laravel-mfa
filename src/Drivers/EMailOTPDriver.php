@@ -256,8 +256,10 @@ class EMailOTPDriver extends AbstractDriver{
      */
     protected function setThrottle(Authenticatable $user): void{
         $key = $this->getThrottleKey($user);
-        $throttle = $this->config['throttle'] ?? 60;        
-        cache()->put($key, true, now()->addSeconds($throttle));
+        $throttle = $this->config['throttle'] ?? 60;
+        $expiresAt = now()->addSeconds($throttle);
+        cache()->put($key, true, $expiresAt);
+        cache()->put($key . ':expires_at', $expiresAt->timestamp, $expiresAt);
     }
 
     /**
@@ -278,7 +280,7 @@ class EMailOTPDriver extends AbstractDriver{
      */
     protected function getThrottleSecondsRemaining(Authenticatable $user): int{
         $key = $this->getThrottleKey($user);
-        $expiresAt = (int) cache()->get($key . ':expires_at', 300);
+        $expiresAt = (int) cache()->get($key . ':expires_at', 0);
         if (!$expiresAt) {
             // Fallback: estimate based on throttle config
             return $this->config['throttle'] ?? 60;

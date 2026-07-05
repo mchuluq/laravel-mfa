@@ -82,23 +82,38 @@ class MFAChallengeController extends Controller{
         if ($this->mfa->isVerified()) {
             return $this->redirectToIntended();
         }
+        $driverInstance = $this->mfa->driver($driver);
+        // Check if driver is enabled and configured
+        if (!$driverInstance->isEnabled() || !$driverInstance->isConfigured($user)) {
+            return redirect()->route('mfa.challenge.index')->with('error', 'This MFA method is not available.');
+        }
         try {
-            $driverInstance = $this->mfa->driver($driver);
-            // Check if driver is enabled and configured
-            if (!$driverInstance->isEnabled() || !$driverInstance->isConfigured($user)) {
-                return redirect()->route('mfa.challenge.index')->with('error', 'This MFA method is not available.');
-            }
             // Issue challenge (for email OTP, this sends the email)
             $challengeData = $driverInstance->challenge($user);
+        } catch (MFAException $e) {
+            if (!$e->isRateLimited()) {
+                return redirect()->route('mfa.challenge.index')->with('error', $e->getMessage());
+            }
+            // A challenge (e.g. an email code) was already issued recently.
+            // Re-render this same challenge form instead of bouncing back to
+            // the selector: when this is the user's only enabled method, the
+            // selector immediately redirects right back here, which would
+            // throw again and loop (redirect -> throttled -> redirect -> ...)
+            // until the browser gives up with "too many redirects".
+            $challengeData = ['message' => $e->getMessage()];
             return view($driverInstance->getChallengeView(), [
                 'driver' => $driver,
                 'challengeData' => $challengeData,
                 'driverName' => $driverInstance->getDisplayName(),
                 'drivers' => $this->mfa->getEnabledDrivers($user),
-            ]);
-        } catch (MFAException $e) {
-            return redirect()->route('mfa.challenge.index')->with('error', $e->getMessage());
+            ])->with('message', $e->getMessage());
         }
+        return view($driverInstance->getChallengeView(), [
+            'driver' => $driver,
+            'challengeData' => $challengeData,
+            'driverName' => $driverInstance->getDisplayName(),
+            'drivers' => $this->mfa->getEnabledDrivers($user),
+        ]);
     }
 
     /**
@@ -219,7 +234,7 @@ class MFAChallengeController extends Controller{
      * @return \Illuminate\Http\RedirectResponse
      */
     protected function redirectToIntended(){
-        $url = session()->pull('mfa_intended_url', config('mfa.authenticated_redirect_uri'));
+        $url = session()->pull('mfa_intended_url', config('mfa.authenticated_redirect_uri', '/dashboard'));
         return redirect()->to($url);
     }
 

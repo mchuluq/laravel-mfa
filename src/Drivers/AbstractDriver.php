@@ -237,6 +237,7 @@ abstract class AbstractDriver implements MFADriverContract{
      */
     protected function clearRateLimit(Authenticatable $user): void{
         $key = $this->getRateLimitKey($user);
+        cache()->forget($key);
         cache()->forget($key . ':timer');
     }
 
