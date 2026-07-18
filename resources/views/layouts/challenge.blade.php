@@ -15,7 +15,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
-    <base href="{{env('APP_URL')}}">
+    <base href="{{config('app.url')}}">
 
     <link rel="icon" href="{{url('assets/img/favicon.ico')}}">
     <link rel="apple-touch-icon" href="{{url('assets/img/sister.yudharta.1024.webp')}}">
