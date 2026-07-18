@@ -4,13 +4,24 @@ use Illuminate\Contracts\Auth\Authenticatable;
 use Nyholm\Psr7\ServerRequest;
 use Psr\Http\Message\ServerRequestInterface;
 use Throwable;
-use Webauthn\Server;
+use Cose\Algorithm\Signature\ECDSA\ES256;
+use Cose\Algorithm\Signature\RSA\RS256;
+use Webauthn\AttestationStatement\AttestationStatementSupportManager;
+use Webauthn\AttestationStatement\NoneAttestationStatementSupport;
+use Webauthn\AuthenticatorAssertionResponse;
+use Webauthn\AuthenticatorAssertionResponseValidator;
+use Webauthn\AuthenticatorAttestationResponse;
+use Webauthn\AuthenticatorAttestationResponseValidator;
+use Webauthn\AuthenticatorSelectionCriteria;
+use Webauthn\CeremonyStep\CeremonyStepManagerFactory;
+use Webauthn\Denormalizer\WebauthnSerializerFactory;
+use Webauthn\PublicKeyCredential;
 use Webauthn\PublicKeyCredentialCreationOptions;
+use Webauthn\PublicKeyCredentialDescriptor;
+use Webauthn\PublicKeyCredentialParameters;
 use Webauthn\PublicKeyCredentialRequestOptions;
 use Webauthn\PublicKeyCredentialRpEntity;
 use Webauthn\PublicKeyCredentialUserEntity;
-use Webauthn\PublicKeyCredentialDescriptor;
-use Webauthn\AuthenticatorSelectionCriteria;
 use Base64Url\Base64Url;
 use Mchuluq\LaravelMFA\Models\WebAuthnKey;
 use Mchuluq\LaravelMFA\Exceptions\MFAException;
@@ -50,20 +61,24 @@ class WebAuthnDriver extends AbstractDriver{
      */
     public function setup(Authenticatable $user, array $options = []){
         try {
-            $server = $this->getServer();
-            $server->timeout = $this->config['timeout'] ?? 60000;
             $userEntity = $this->getUserEntity($user);
             $excludeCredentials = $this->getExistingCredentialDescriptors($user);
             $criteria = new AuthenticatorSelectionCriteria(
                 $this->config['authenticator_attachment'] ?? null,
-                $this->config['require_resident_key'] ?? false,
-                $this->config['user_verification'] ?? 'preferred'
+                $this->config['user_verification'] ?? AuthenticatorSelectionCriteria::USER_VERIFICATION_REQUIREMENT_PREFERRED,
+                ($this->config['require_resident_key'] ?? false)
+                    ? AuthenticatorSelectionCriteria::RESIDENT_KEY_REQUIREMENT_REQUIRED
+                    : AuthenticatorSelectionCriteria::RESIDENT_KEY_REQUIREMENT_NO_PREFERENCE
             );
-            $creationOptions = $server->generatePublicKeyCredentialCreationOptions(
+            $creationOptions = new PublicKeyCredentialCreationOptions(
+                $this->getRelyingPartyEntity(),
                 $userEntity,
-                $this->config['attestation'] ?? 'none',
+                random_bytes(32),
+                $this->getPublicKeyCredentialParameters(),
+                $criteria,
+                $this->config['attestation'] ?? PublicKeyCredentialCreationOptions::ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
                 $excludeCredentials,
-                $criteria
+                $this->config['timeout'] ?? 60000
             );
             // Store the exact options object used to generate the challenge, so the
             // attestation can be verified against the very same challenge/params later.
@@ -106,38 +121,57 @@ class WebAuthnDriver extends AbstractDriver{
             }
             /** @var PublicKeyCredentialRequestOptions $requestOptions */
             $requestOptions = unserialize($storedOptions, ['allowed_classes' => true]);
-            $server = $this->getServer();
-            $userEntity = $this->getUserEntity($user);
+
+            $webAuthnKey = $this->getCredentialRepository()->findByCredentialId(
+                (string) $user->getAuthIdentifier(),
+                Base64Url::decode($credentialData['id'])
+            );
+            if (!$webAuthnKey) {
+                $this->incrementRateLimit($user);
+                return false;
+            }
+
+            $publicKeyCredential = $this->getSerializer()->deserialize(
+                json_encode($credentialData),
+                PublicKeyCredential::class,
+                'json'
+            );
+            if (!$publicKeyCredential->response instanceof AuthenticatorAssertionResponse) {
+                $this->incrementRateLimit($user);
+                return false;
+            }
+
+            $credentialRecord = $this->getCredentialRepository()->toCredentialRecord($webAuthnKey);
+            $validator = AuthenticatorAssertionResponseValidator::create(
+                $this->getCeremonyStepManagerFactory()->requestCeremony()
+            );
             // This performs full WebAuthn assertion verification: challenge match,
             // origin/rpId check, user presence/verification flags, signature
             // verification against the stored public key, and counter replay check.
-            $publicKeyCredentialSource = $server->loadAndCheckAssertionResponse(
-                json_encode($credentialData),
+            $credentialRecord = $validator->check(
+                $credentialRecord,
+                $publicKeyCredential->response,
                 $requestOptions,
-                $userEntity,
-                $this->getPsrRequest()
+                $this->getRelyingPartyEntity()->id,
+                (string) $user->getAuthIdentifier()
             );
             // Defense in depth: the credential must belong to the user being verified.
-            if ((string) $publicKeyCredentialSource->getUserHandle() !== (string) $user->getAuthIdentifier()) {
+            if ((string) $credentialRecord->userHandle !== (string) $user->getAuthIdentifier()) {
                 throw MFAException::webAuthnError('Credential does not belong to this user.');
             }
             session()->forget([$this->requestOptionsKey]);
-            $webAuthnKey = WebAuthnKey::where('user_id', $user->getAuthIdentifier())
-                ->where('credential_id', Base64Url::encode($publicKeyCredentialSource->getPublicKeyCredentialId()))
-                ->first();
-            if ($webAuthnKey) {
-                $webAuthnKey->markAsUsed();
-            }
+            $this->getCredentialRepository()->updateFromCredentialRecord($webAuthnKey, $credentialRecord);
+            $webAuthnKey->markAsUsed();
             $this->clearRateLimit($user);
             $this->updateLastUsed($user);
             $this->fireEvent(WebAuthnVerified::class, [
                 'user' => $user,
                 'driver' => $this->name,
-                'key_id' => $webAuthnKey->id ?? null,
+                'key_id' => $webAuthnKey->id,
             ]);
             $this->log('WebAuthn verification successful', [
                 'user_id' => $user->getAuthIdentifier(),
-                'key_id' => $webAuthnKey->id ?? null,
+                'key_id' => $webAuthnKey->id,
             ]);
             return true;
         } catch (Throwable $e) {
@@ -159,12 +193,13 @@ class WebAuthnDriver extends AbstractDriver{
      */
     public function challenge(Authenticatable $user, array $options = []){
         try {
-            $server = $this->getServer();
-            $server->timeout = $this->config['timeout'] ?? 60000;
             $allowCredentials = $this->getExistingCredentialDescriptors($user);
-            $requestOptions = $server->generatePublicKeyCredentialRequestOptions(
-                $this->config['user_verification'] ?? 'preferred',
-                $allowCredentials
+            $requestOptions = new PublicKeyCredentialRequestOptions(
+                random_bytes(32),
+                $this->getRelyingPartyEntity()->id,
+                $allowCredentials,
+                $this->config['user_verification'] ?? AuthenticatorSelectionCriteria::USER_VERIFICATION_REQUIREMENT_PREFERRED,
+                $this->config['timeout'] ?? 60000
             );
             session()->put($this->requestOptionsKey, serialize($requestOptions));
             return [
@@ -192,13 +227,23 @@ class WebAuthnDriver extends AbstractDriver{
         /** @var PublicKeyCredentialCreationOptions $creationOptions */
         $creationOptions = unserialize($storedOptions, ['allowed_classes' => true]);
         try {
-            $server = $this->getServer();
+            $publicKeyCredential = $this->getSerializer()->deserialize(
+                json_encode($credential),
+                PublicKeyCredential::class,
+                'json'
+            );
+            if (!$publicKeyCredential->response instanceof AuthenticatorAttestationResponse) {
+                throw MFAException::webAuthnError('Invalid attestation response.');
+            }
+            $validator = AuthenticatorAttestationResponseValidator::create(
+                $this->getCeremonyStepManagerFactory()->creationCeremony()
+            );
             // Full attestation verification: challenge match, origin/rpId check,
             // attestation statement validity, and that the credential ID is new.
-            $publicKeyCredentialSource = $server->loadAndCheckAttestationResponse(
-                json_encode($credential),
+            $credentialRecord = $validator->check(
+                $publicKeyCredential->response,
                 $creationOptions,
-                $this->getPsrRequest()
+                $this->getRelyingPartyEntity()->id
             );
         } catch (Throwable $e) {
             $this->log('WebAuthn registration failed', [
@@ -207,16 +252,11 @@ class WebAuthnDriver extends AbstractDriver{
             ]);
             throw MFAException::webAuthnError($e->getMessage());
         }
-        $webAuthnKey = WebAuthnKey::create([
-            'user_id' => $user->getAuthIdentifier(),
-            'name' => $name ?: 'Security Key',
-            'credential_id' => Base64Url::encode($publicKeyCredentialSource->getPublicKeyCredentialId()),
-            'public_key' => Base64Url::encode($publicKeyCredentialSource->getCredentialPublicKey()),
-            'aaguid' => $publicKeyCredentialSource->getAaguid()->toString(),
-            'counter' => $publicKeyCredentialSource->getCounter(),
-            'transports' => $publicKeyCredentialSource->getTransports(),
-            'attestation_format' => $publicKeyCredentialSource->getAttestationType(),
-        ]);
+        $webAuthnKey = $this->getCredentialRepository()->persistFromCredentialRecord(
+            $credentialRecord,
+            (string) $user->getAuthIdentifier(),
+            $name
+        );
         // Enable the method
         $this->enableMethod($user);
         // Clear session
@@ -318,13 +358,59 @@ class WebAuthnDriver extends AbstractDriver{
     }
 
     /**
-     * Build a WebAuthn server instance bound to this app's relying party and
-     * to the Eloquent-backed credential source repository.
+     * Mapper between the Eloquent-backed WebAuthnKey model and webauthn-lib's
+     * CredentialRecord value object.
      *
-     * @return Server
+     * @return EloquentCredentialSourceRepository
      */
-    protected function getServer(): Server{
-        return new Server($this->getRelyingPartyEntity(), new EloquentCredentialSourceRepository());
+    protected function getCredentialRepository(): EloquentCredentialSourceRepository{
+        return new EloquentCredentialSourceRepository();
+    }
+
+    /**
+     * Build the Symfony serializer webauthn-lib uses to turn the raw JSON credential
+     * sent by the browser into PublicKeyCredential/AuthenticatorResponse objects.
+     *
+     * @return \Symfony\Component\Serializer\SerializerInterface
+     */
+    protected function getSerializer(){
+        return (new WebauthnSerializerFactory($this->getAttestationStatementSupportManager()))->create();
+    }
+
+    /**
+     * Build the ceremony step pipeline (challenge, origin, signature, counter, ...
+     * checks) for both the registration and authentication ceremonies, scoped to
+     * this app's own origin only.
+     *
+     * @return CeremonyStepManagerFactory
+     */
+    protected function getCeremonyStepManagerFactory(): CeremonyStepManagerFactory{
+        $factory = new CeremonyStepManagerFactory();
+        $factory->setAttestationStatementSupportManager($this->getAttestationStatementSupportManager());
+        $factory->setAllowedOrigins([rtrim(config('app.url'), '/')]);
+        return $factory;
+    }
+
+    /**
+     * @return AttestationStatementSupportManager
+     */
+    protected function getAttestationStatementSupportManager(): AttestationStatementSupportManager{
+        return new AttestationStatementSupportManager([
+            new NoneAttestationStatementSupport(),
+        ]);
+    }
+
+    /**
+     * The public key algorithms this relying party accepts (ES256/RS256, the two
+     * most broadly supported COSE algorithms across platform/roaming authenticators).
+     *
+     * @return PublicKeyCredentialParameters[]
+     */
+    protected function getPublicKeyCredentialParameters(): array{
+        return [
+            PublicKeyCredentialParameters::createPk(ES256::ID),
+            PublicKeyCredentialParameters::createPk(RS256::ID),
+        ];
     }
 
     /**

@@ -25,6 +25,9 @@ class WebAuthnKey extends Model{
         'counter',
         'transports',
         'attestation_format',
+        'backup_eligible',
+        'backup_status',
+        'uv_initialized',
         'last_used_at',
     ];
 
@@ -36,6 +39,9 @@ class WebAuthnKey extends Model{
     protected $casts = [
         'transports' => 'array',
         'counter' => 'integer',
+        'backup_eligible' => 'boolean',
+        'backup_status' => 'boolean',
+        'uv_initialized' => 'boolean',
         'last_used_at' => 'datetime',
     ];
 

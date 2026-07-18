@@ -22,6 +22,9 @@ class CreateWebauthnKeysTable extends Migration{
             $table->unsignedInteger('counter')->default(0); // Sign counter for replay protection
             $table->json('transports')->nullable(); // Transport methods (usb, nfc, ble, internal)
             $table->string('attestation_format', 50)->nullable();
+            $table->boolean('backup_eligible')->nullable(); // webauthn-lib v5 CredentialRecord backup state
+            $table->boolean('backup_status')->nullable();
+            $table->boolean('uv_initialized')->nullable();
             $table->timestamp('last_used_at')->nullable();
             $table->timestamps();
 
