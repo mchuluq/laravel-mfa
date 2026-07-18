@@ -470,10 +470,17 @@ class WebAuthnDriver extends AbstractDriver{
     /**
      * Encode options to JSON-safe array.
      *
+     * The options objects (PublicKeyCredentialCreationOptions/RequestOptions) carry
+     * raw binary in `challenge` (and user id, credential ids). A plain json_encode()
+     * fails with "Malformed UTF-8 characters" on that binary, so this must go through
+     * the webauthn-lib serializer, which base64url-encodes those fields the way the
+     * browser's PublicKeyCredential.parseCreationOptionsFromJSON()/parseRequestOptionsFromJSON()
+     * expect.
+     *
      * @param mixed $options
      * @return array
      */
     protected function encodeOptions($options): array{
-        return json_decode(json_encode($options), true);
+        return json_decode($this->getSerializer()->serialize($options, 'json'), true);
     }
 }
