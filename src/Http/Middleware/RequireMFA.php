@@ -36,9 +36,12 @@ class RequireMFA{
         if (!config('mfa.enabled', true)) {
             return $next($request);
         }
-        // Check if user is authenticated
+        // Guests are not this middleware's concern: authentication belongs to the `auth`
+        // middleware stacked before it (['auth', 'mfa']). Passing them through also lets
+        // `mfa` guard routes that handle guests themselves, e.g. Passport's /oauth/authorize
+        // (prompt=none / prompt=login, intended url).
         if (!Auth::check()) {
-            return redirect()->route('login');
+            return $next($request);
         }
         $user = Auth::user();
         // Check if user requires MFA
